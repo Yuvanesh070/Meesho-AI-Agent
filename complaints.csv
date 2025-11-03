@@ -1,0 +1,7 @@
+﻿"Complaint_ID,Message,Supplier,Product,Order_ID"
+"1,Received damaged saree from XYZ Traders,XYZ Traders,Saree,O1001"
+"2,Wrong size sent by ABC Textiles,ABC Textiles,Shirt,O1002"
+"3,Late delivery by courier,DEF Logistics,Shoes,O1003"
+"4,Color mismatch from XYZ Traders,XYZ Traders,Dress,O1004"
+"5,Missing product from GHI Suppliers,GHI Suppliers,Bag,O1005"
+"6,Excellent quality, thank you,GHI Suppliers,Bag,O1006"
