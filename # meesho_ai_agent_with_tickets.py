@@ -20,7 +20,10 @@ SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT") or 587)
 EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-USE_EMAIL_ALERTS = os.getenv("USE_EMAIL_ALERTS", "false").lower() == "true"
+
+# Send email alert only to this address
+ALERT_EMAIL = "yuvaneshbabu007@gmail.com"
+THRESHOLD = 3  # send email only if supplier issue count > 3
 
 if not OPENAI_API_KEY:
     st.error("Please set OPENAI_API_KEY in your .env file.")
@@ -44,27 +47,20 @@ if not os.path.exists(TICKETS_FILE):
 
 # ---------- Helper functions ----------
 def call_openai_classify(text):
-    """
-    Uses OpenAI ChatCompletion to classify complaint text.
-    Returns one of: 'Supplier Issue', 'Logistics Issue', 'Customer Issue'
-    """
+    """Uses OpenAI ChatCompletion to classify complaint text."""
     prompt = (
         "You are an assistant that classifies customer complaint text into exactly one of these categories: "
-        "'Supplier Issue', 'Logistics Issue', 'Customer Issue'.\n\n"
+        "'Supplier Issue', 'Logistics Issue', or 'Customer Issue'.\n\n"
         "Return only the category text (no extra words).\n\n"
         f"Complaint: \"{text}\""
     )
-
     try:
         resp = openai.ChatCompletion.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0
         )
         answer = resp["choices"][0]["message"]["content"].strip()
-        # Normalize some variants
         if "supplier" in answer.lower():
             return "Supplier Issue"
         if "logistic" in answer.lower():
@@ -75,10 +71,7 @@ def call_openai_classify(text):
         return "Unknown"
 
 def create_ticket_entry(complaint_row, issue_text):
-    """
-    Append a ticket row to tickets.csv and return ticket id and dict.
-    """
-    # Generate Ticket_ID (timestamp-based)
+    """Append a ticket row to tickets.csv and return ticket info."""
     ticket_id = f"T{int(time.time()*1000)}"
     created_at = datetime.now().isoformat(sep=' ', timespec='seconds')
     ticket = {
@@ -92,57 +85,25 @@ def create_ticket_entry(complaint_row, issue_text):
         "Status": "Open",
         "Notes": ""
     }
-    # Append to CSV
     with open(TICKETS_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            ticket["Ticket_ID"], ticket["Complaint_ID"], ticket["Supplier"], ticket["Product"],
-            ticket["Order_ID"], ticket["Issue"], ticket["Created_At"], ticket["Status"], ticket["Notes"]
-        ])
+        writer.writerow(ticket.values())
     return ticket
 
-def send_slack_alert(ticket):
-    """
-    Send a simple Slack message using incoming webhook.
-    """
-    if not SLACK_WEBHOOK_URL:
-        return False, "No SLACK_WEBHOOK_URL configured."
-
-    text = (
-        f":warning: *New Supplier Ticket Created*\n"
-        f"*Ticket ID:* {ticket['Ticket_ID']}\n"
-        f"*Supplier:* {ticket['Supplier']}\n"
-        f"*Complaint ID:* {ticket['Complaint_ID']}\n"
-        f"*Product:* {ticket['Product']}\n"
-        f"*Issue:* {ticket['Issue']}\n"
-        f"*Time:* {ticket['Created_At']}"
-    )
-    payload = {"text": text}
-    try:
-        resp = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=10)
-        if resp.status_code == 200:
-            return True, "Slack alert sent."
-        else:
-            return False, f"Slack returned {resp.status_code}: {resp.text}"
-    except Exception as e:
-        return False, str(e)
-
-def send_email_alert(ticket, recipient):
-    """
-    Send basic email alert (optional). Requires SMTP config in .env
-    """
+def send_email_alert(recipient, supplier, count):
+    """Send email alert when supplier issue threshold exceeded."""
     if not (SMTP_SERVER and EMAIL_USERNAME and EMAIL_PASSWORD):
         return False, "Email settings not configured."
     try:
         msg = MIMEMultipart()
         msg["From"] = EMAIL_USERNAME
         msg["To"] = recipient
-        msg["Subject"] = f"[Meesho] New Supplier Ticket {ticket['Ticket_ID']}"
+        msg["Subject"] = f"[ALERT] Supplier {supplier} has {count} issues!"
         body = (
-            f"New Supplier Ticket Created\n\n"
-            f"Ticket ID: {ticket['Ticket_ID']}\nSupplier: {ticket['Supplier']}\n"
-            f"Complaint ID: {ticket['Complaint_ID']}\nProduct: {ticket['Product']}\n"
-            f"Issue: {ticket['Issue']}\nCreated At: {ticket['Created_At']}\n"
+            f"Hello,\n\n"
+            f"The supplier *{supplier}* has reached {count} complaints in this batch upload.\n"
+            f"This exceeds the threshold of {THRESHOLD}.\n\n"
+            "Please investigate immediately.\n\nRegards,\nMeesho AI Quality Agent"
         )
         msg.attach(MIMEText(body, "plain"))
 
@@ -151,26 +112,25 @@ def send_email_alert(ticket, recipient):
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         server.sendmail(EMAIL_USERNAME, recipient, msg.as_string())
         server.quit()
-        return True, "Email sent."
+        return True, "Email alert sent successfully."
     except Exception as e:
         return False, str(e)
 
 # ---------- UI ----------
 st.sidebar.header("Settings")
-auto_ticket_threshold = st.sidebar.number_input("Auto-ticket threshold per supplier (create ticket when supplier issues ≥ this in upload)", min_value=1, max_value=100, value=1)
-slack_alerts = st.sidebar.checkbox("Send Slack alerts for every new ticket", value=True)
-email_alerts = st.sidebar.checkbox("Send email alerts for every new ticket", value=False)
-email_recipient = st.sidebar.text_input("Alert email recipient (if email alerts enabled)", value=EMAIL_USERNAME or "")
-
+auto_ticket_threshold = st.sidebar.number_input(
+    "Auto-ticket threshold per supplier (create ticket when supplier issues ≥ this in upload)",
+    min_value=1, max_value=100, value=1
+)
 uploaded_file = st.file_uploader("Upload complaints CSV", type=["csv"])
+
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
     st.subheader("Uploaded complaints")
     st.dataframe(df)
 
-    # Ensure required columns exist
     required_cols = {"Complaint_ID", "Message", "Supplier", "Product"}
-    if not required_cols.issubset(set(df.columns)):
+    if not required_cols.issubset(df.columns):
         st.error(f"Uploaded CSV must contain columns: {', '.join(required_cols)}")
     else:
         if st.button("Run AI classification & create tickets"):
@@ -179,39 +139,29 @@ if uploaded_file:
             st.success("Classification complete")
             st.dataframe(df[["Complaint_ID", "Message", "Supplier", "AI_Category"]])
 
-            # Count supplier issues per supplier
             supplier_counts = df[df["AI_Category"] == "Supplier Issue"]["Supplier"].value_counts()
             st.subheader("Supplier Issue Counts")
-            st.table(supplier_counts.reset_index().rename(columns={"index": "Supplier", "Supplier": "Supplier_Issue_Count"}))
+            st.table(supplier_counts.reset_index().rename(columns={"index": "Supplier", "Supplier": "Count"}))
 
-            # Create tickets for supplier issues (per complaint)
+            # --- Email alert if threshold exceeded ---
+            for supplier, count in supplier_counts.items():
+                if count > THRESHOLD:
+                    ok, msg = send_email_alert(ALERT_EMAIL, supplier, count)
+                    st.write(f"📧 Email to {ALERT_EMAIL}: {msg}")
+
+            # --- Create tickets for all supplier issues ---
             new_tickets = []
             for _, row in df.iterrows():
                 if row["AI_Category"] == "Supplier Issue":
                     ticket = create_ticket_entry(row, "Supplier Issue detected from complaint text")
                     new_tickets.append(ticket)
-                    # Alerts
-                    if slack_alerts:
-                        ok, msg = send_slack_alert(ticket)
-                        st.write(f"Slack: {msg}")
-                    if email_alerts and USE_EMAIL_ALERTS and email_recipient:
-                        ok, msg = send_email_alert(ticket, email_recipient)
-                        st.write(f"Email: {msg}")
 
-            # Additionally: create tickets for suppliers exceeding threshold in this upload
+            # Aggregate alert tickets
             for supplier, cnt in supplier_counts.items():
                 if cnt >= auto_ticket_threshold:
-                    # create a summary ticket for the supplier (if not already created for each complaint)
-                    # For simplicity we'll create an aggregated ticket
                     sample_row = df[df["Supplier"] == supplier].iloc[0].to_dict()
                     ticket = create_ticket_entry(sample_row, f"Aggregate alert: {cnt} supplier issues in upload")
                     new_tickets.append(ticket)
-                    if slack_alerts:
-                        ok, msg = send_slack_alert(ticket)
-                        st.write(f"Slack (aggregate): {msg}")
-                    if email_alerts and USE_EMAIL_ALERTS and email_recipient:
-                        ok, msg = send_email_alert(ticket, email_recipient)
-                        st.write(f"Email (aggregate): {msg}")
 
             st.subheader("New Tickets Created")
             if new_tickets:
