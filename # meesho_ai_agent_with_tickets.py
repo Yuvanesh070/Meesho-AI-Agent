@@ -1,4 +1,4 @@
-# meesho_ai_agent_with_tickets.py (Final Debug Version)
+# meesho_ai_agent_with_tickets.py (Full Debug Version)
 
 import streamlit as st
 import pandas as pd
@@ -13,7 +13,6 @@ from email.mime.multipart import MIMEMultipart
 
 # ---------- Load config ----------
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
@@ -61,22 +60,18 @@ def create_ticket_entry(complaint_row, issue_text):
         writer.writerow(ticket.values())
     return ticket
 
-# ---------- Email Alert (with debug prints) ----------
+# ---------- Email Alert with Debug ----------
 def send_email_alert(ticket, recipient):
+    st.write("📧 Debug: Starting email send...")
+    st.write(f"SMTP_SERVER: {SMTP_SERVER}, PORT: {SMTP_PORT}")
+    st.write(f"EMAIL_USERNAME: {EMAIL_USERNAME}")
+    st.write(f"Recipient: {recipient}")
+
     if not (SMTP_SERVER and EMAIL_USERNAME and EMAIL_PASSWORD):
-        print("❌ Email not configured properly. Check SMTP, username, and password.")
+        st.error("❌ Email not configured properly. Check SMTP, username, and password.")
         return False, "Email settings not configured."
 
     try:
-        print("\n======================")
-        print("📧 Preparing to send email alert...")
-        print("SMTP_SERVER:", SMTP_SERVER)
-        print("SMTP_PORT:", SMTP_PORT)
-        print("EMAIL_USERNAME:", EMAIL_USERNAME)
-        print("Recipient:", recipient)
-        print("Ticket ID:", ticket['Ticket_ID'])
-        print("======================\n")
-
         msg = MIMEMultipart()
         msg["From"] = EMAIL_USERNAME
         msg["To"] = recipient
@@ -89,23 +84,22 @@ def send_email_alert(ticket, recipient):
         )
         msg.attach(MIMEText(body, "plain"))
 
-        print("🔗 Connecting to SMTP server...")
+        st.write("🔗 Connecting to SMTP server...")
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
         server.starttls()
-        print("🔒 TLS connection established.")
+        st.write("🔒 TLS connection established.")
+
+        st.write("Attempting login...")
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-        print("✅ Logged in successfully to SMTP server.")
+        st.write("✅ Logged in successfully to SMTP server.")
 
         server.sendmail(EMAIL_USERNAME, recipient, msg.as_string())
         server.quit()
-        print("✅ Email successfully sent to", recipient)
-        print("======================\n")
-
+        st.success(f"✅ Email successfully sent to {recipient}")
         return True, "Email sent successfully."
 
     except Exception as e:
-        print("❌ Email failed to send:", str(e))
-        print("======================\n")
+        st.error(f"❌ Email failed: {e}")
         return False, str(e)
 
 # ---------- Streamlit UI ----------
@@ -129,14 +123,12 @@ if uploaded_file:
         st.success("Classification complete")
         st.dataframe(df[["Complaint_ID", "Message", "Supplier", "AI_Category"]])
 
-        # ✅ FIXED COUNT: Count all complaints per supplier (not only Supplier Issues)
         supplier_counts = df.groupby("Supplier")["Complaint_ID"].count().reset_index(name="count")
 
         st.subheader("Supplier Issue Counts (All Complaints)")
         st.dataframe(supplier_counts)
 
         new_tickets = []
-        # Create individual tickets for supplier issues
         for _, row in df.iterrows():
             if row["AI_Category"] == "Supplier Issue":
                 ticket = create_ticket_entry(row, "Supplier Issue detected from complaint text")
@@ -144,7 +136,6 @@ if uploaded_file:
                 if email_alerts:
                     send_email_alert(ticket, email_recipient)
 
-        # ✅ Aggregate alerts for suppliers exceeding threshold
         for _, row in supplier_counts.iterrows():
             supplier, cnt = row["Supplier"], row["count"]
             if cnt >= auto_ticket_threshold:
