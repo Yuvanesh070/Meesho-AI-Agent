@@ -1,4 +1,4 @@
-# meesho_ai_agent_with_tickets.py (Final Fixed Version)
+# meesho_ai_agent_with_tickets.py (Final Debug Version)
 
 import streamlit as st
 import pandas as pd
@@ -61,13 +61,22 @@ def create_ticket_entry(complaint_row, issue_text):
         writer.writerow(ticket.values())
     return ticket
 
-# ---------- Email Alert ----------
+# ---------- Email Alert (with debug prints) ----------
 def send_email_alert(ticket, recipient):
     if not (SMTP_SERVER and EMAIL_USERNAME and EMAIL_PASSWORD):
-        print("Email not configured properly")
+        print("❌ Email not configured properly. Check SMTP, username, and password.")
         return False, "Email settings not configured."
 
     try:
+        print("\n======================")
+        print("📧 Preparing to send email alert...")
+        print("SMTP_SERVER:", SMTP_SERVER)
+        print("SMTP_PORT:", SMTP_PORT)
+        print("EMAIL_USERNAME:", EMAIL_USERNAME)
+        print("Recipient:", recipient)
+        print("Ticket ID:", ticket['Ticket_ID'])
+        print("======================\n")
+
         msg = MIMEMultipart()
         msg["From"] = EMAIL_USERNAME
         msg["To"] = recipient
@@ -80,15 +89,23 @@ def send_email_alert(ticket, recipient):
         )
         msg.attach(MIMEText(body, "plain"))
 
+        print("🔗 Connecting to SMTP server...")
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
         server.starttls()
+        print("🔒 TLS connection established.")
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+        print("✅ Logged in successfully to SMTP server.")
+
         server.sendmail(EMAIL_USERNAME, recipient, msg.as_string())
         server.quit()
-        print("✅ Email sent to", recipient)
+        print("✅ Email successfully sent to", recipient)
+        print("======================\n")
+
         return True, "Email sent successfully."
+
     except Exception as e:
-        print("❌ Email failed:", e)
+        print("❌ Email failed to send:", str(e))
+        print("======================\n")
         return False, str(e)
 
 # ---------- Streamlit UI ----------
