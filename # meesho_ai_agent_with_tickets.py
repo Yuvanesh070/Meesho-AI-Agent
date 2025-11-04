@@ -1,10 +1,9 @@
-# meesho_ai_agent_with_tickets.py
+# meesho_ai_agent_with_tickets.py (Final Fixed Version)
 
 import streamlit as st
 import pandas as pd
 import os
 import time
-import requests
 import csv
 from datetime import datetime
 from dotenv import load_dotenv
@@ -15,22 +14,10 @@ from email.mime.multipart import MIMEMultipart
 # ---------- Load config ----------
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-USE_EMAIL_ALERTS = os.getenv("USE_EMAIL_ALERTS", "false").lower() == "true"
-
-# Debug info
-print("Loaded config:")
-print("SMTP_SERVER:", SMTP_SERVER)
-print("EMAIL_USERNAME:", EMAIL_USERNAME)
-print("USE_EMAIL_ALERTS:", USE_EMAIL_ALERTS)
-
-if not OPENAI_API_KEY:
-    st.error("Please set OPENAI_API_KEY in your .env or Streamlit secrets.")
-    st.stop()
 
 # ---------- App config ----------
 st.set_page_config(page_title="Meesho Supplier Quality AI + Tickets", layout="wide")
@@ -39,20 +26,17 @@ st.markdown("Upload complaints; supplier-related complaints will auto-create tic
 
 # Ticket file
 TICKETS_FILE = "tickets.csv"
-
-# Create tickets file header if not exists
 if not os.path.exists(TICKETS_FILE):
     with open(TICKETS_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Ticket_ID", "Complaint_ID", "Supplier", "Product", "Order_ID", "Issue", "Created_At", "Status", "Notes"])
 
-# ---------- Dummy Classification Function ----------
-# (OpenAI disabled in your setup, using fixed logic)
+# ---------- Dummy Classification ----------
 def call_openai_classify(text):
     text = text.lower()
-    if "damage" in text or "wrong" in text or "missing" in text or "color" in text:
+    if any(word in text for word in ["damage", "wrong", "missing", "color", "defect"]):
         return "Supplier Issue"
-    elif "late" in text or "courier" in text or "delivery" in text:
+    elif any(word in text for word in ["late", "courier", "delivery"]):
         return "Logistics Issue"
     else:
         return "Customer Issue"
@@ -84,11 +68,10 @@ def send_email_alert(ticket, recipient):
         return False, "Email settings not configured."
 
     try:
-        print("Attempting to send mail to:", recipient)
         msg = MIMEMultipart()
         msg["From"] = EMAIL_USERNAME
         msg["To"] = recipient
-        msg["Subject"] = f"[Meesho] New Supplier Ticket {ticket['Ticket_ID']}"
+        msg["Subject"] = f"[Meesho Alert] Supplier {ticket['Supplier']} - {ticket['Issue']}"
         body = (
             f"New Supplier Ticket Created\n\n"
             f"Ticket ID: {ticket['Ticket_ID']}\nSupplier: {ticket['Supplier']}\n"
@@ -102,20 +85,20 @@ def send_email_alert(ticket, recipient):
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         server.sendmail(EMAIL_USERNAME, recipient, msg.as_string())
         server.quit()
-        print("✅ Email successfully sent to", recipient)
+        print("✅ Email sent to", recipient)
         return True, "Email sent successfully."
     except Exception as e:
         print("❌ Email failed:", e)
         return False, str(e)
 
-# ---------- UI ----------
+# ---------- Streamlit UI ----------
 st.sidebar.header("Settings")
 auto_ticket_threshold = st.sidebar.number_input(
-    "Auto-ticket threshold per supplier (create ticket when supplier issues ≥ this in upload)",
+    "Auto-ticket threshold per supplier\n(create ticket when supplier issues ≥ this in upload)",
     min_value=1, max_value=100, value=3
 )
 email_alerts = st.sidebar.checkbox("Send email alerts for every new ticket", value=True)
-email_recipient = st.sidebar.text_input("Alert email recipient", value="yuvaneshbabu007@gmail.com")
+email_recipient = st.sidebar.text_input("Alert email recipient", "yuvaneshbabu007@gmail.com")
 
 uploaded_file = st.file_uploader("Upload complaints CSV", type=["csv"])
 if uploaded_file:
@@ -129,24 +112,29 @@ if uploaded_file:
         st.success("Classification complete")
         st.dataframe(df[["Complaint_ID", "Message", "Supplier", "AI_Category"]])
 
-        supplier_counts = df[df["AI_Category"] == "Supplier Issue"]["Supplier"].value_counts()
-        st.subheader("Supplier Issue Counts")
-        st.table(supplier_counts.reset_index().rename(columns={"index": "Supplier", "Supplier": "Supplier_Issue_Count"}))
+        # ✅ FIXED COUNT: Count all complaints per supplier (not only Supplier Issues)
+        supplier_counts = df.groupby("Supplier")["Complaint_ID"].count().reset_index(name="count")
+
+        st.subheader("Supplier Issue Counts (All Complaints)")
+        st.dataframe(supplier_counts)
 
         new_tickets = []
+        # Create individual tickets for supplier issues
         for _, row in df.iterrows():
             if row["AI_Category"] == "Supplier Issue":
                 ticket = create_ticket_entry(row, "Supplier Issue detected from complaint text")
                 new_tickets.append(ticket)
-                if email_alerts and USE_EMAIL_ALERTS:
+                if email_alerts:
                     send_email_alert(ticket, email_recipient)
 
-        for supplier, cnt in supplier_counts.items():
+        # ✅ Aggregate alerts for suppliers exceeding threshold
+        for _, row in supplier_counts.iterrows():
+            supplier, cnt = row["Supplier"], row["count"]
             if cnt >= auto_ticket_threshold:
                 sample_row = df[df["Supplier"] == supplier].iloc[0].to_dict()
-                ticket = create_ticket_entry(sample_row, f"Aggregate alert: {cnt} supplier issues in upload")
+                ticket = create_ticket_entry(sample_row, f"Aggregate alert: {cnt} total complaints for {supplier}")
                 new_tickets.append(ticket)
-                if email_alerts and USE_EMAIL_ALERTS:
+                if email_alerts:
                     send_email_alert(ticket, email_recipient)
 
         st.subheader("New Tickets Created")
